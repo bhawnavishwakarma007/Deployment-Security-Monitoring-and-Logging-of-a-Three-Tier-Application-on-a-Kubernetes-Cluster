@@ -1,0 +1,175 @@
+install kubectl    
+
+curl -o kubectl https://amazon-eks.s3.us-west-2.amazonaws.com/1.19.6/2021-01-05/bin/linux/amd64/kubectl
+   chmod +x ./kubectl
+   mv ./kubectl /usr/local/bin 
+   kubectl version --short --client
+
+install eksctl 
+
+   curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+   sudo mv /tmp/eksctl /usr/local/bin
+   eksctl version
+
+aws configure
+
+aws eks update-kubeconfig --region us-east-1 --name kuber
+
+kubectl get nodes
+
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+ Verify installation
+helm version
+
+
+Check using Kubernetes pods 
+kubectl get pods -n kube-system | grep ebs
+
+create ebs-sc.yaml file
+[
+vi ebs-sc.yaml
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: monitor-ebs-storage
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+parameters:
+  type: gp2
+]
+
+
+create application.yaml file [
+
+vi application.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /actuator/prometheus
+    prometheus.io/scrape: "true"
+  name: mysv-cip
+spec:
+  ports:
+    - port: 8081
+      targetPort: 8082
+  selector:
+    app: datastore
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: datastore
+  name: datastore-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datastore
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: datastore
+    spec:
+      containers:
+      - image: 8072388539/datastore:v34.0
+        name: datastore
+        livenessProbe:
+          httpGet:
+            path: /actuator/prometheus
+            port: 8082
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          timeoutSeconds: 4
+          failureThreshold: 3
+
+kubectl apply -f application.yaml
+kubectl apply -f ebs-sc.yaml
+
+#----------------prometheus-configuration------------------#
+attach iam role with admin  acess
+step-1
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver
+
+ste-2
+helm repo update
+
+
+step-3
+helm upgrade --install aws-ebs-csi-driver \
+  aws-ebs-csi-driver/aws-ebs-csi-driver \
+  --namespace kube-system
+step-4
+kubectl get pods -n kube-system | grep ebs
+
+step-5 
+kubectl create namespace prometheus
+
+step-6
+helm install prometheus prometheus-community/prometheus \
+--namespace prometheus \
+--create-namespace \
+--set server.persistentVolume.enabled=false \
+--set alertmanager.persistence.enabled=false
+
+step-7
+kubectl get pods -n prometheus
+
+that's run at server so local host-->load balancer(if u r using server)
+
+step-8
+kubectl expose service prometheus-server \
+--type=LoadBalancer \
+--target-port=9090 \
+--name=prometheus-lb \
+-n prometheus
+
+step-9
+kubectl get svc -n prometheus
+
+ex:http://ac999a6d6b3834a76b665f17144c0b96-xxxx.us-east-1.elb.amazonaws.com
+
+
+#---------------------grafana---------------------#
+
+1.kubectl create namespace grafana
+
+2.
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+
+3.
+helm install grafana grafana/grafana \
+--namespace grafana \
+--set persistence.enabled=false \
+--set adminPassword='shiva' \
+--set service.type=LoadBalancer
+
+after that ignore erreor
+
+kubectl get svc -n Grafana
+ex:a4218daf47e034ae6811e6ac3aac06ed-1710485104.us-east-1.elb.amazonaws.com 
+
+
+login Grafana
+
+Settings ⚙️ → Data Sources → Add data source:--->Prometheus
+
+url:http://prometheus-server.prometheus.svc.cluster.local  :save
+
+sum(kube_pod_status_phase) by (namespace)
+
+. Check Running Pods (Basic Health)
+sum(kube_pod_status_phase{phase="Running"}) by (pod)
+
+
+import 15661
+
